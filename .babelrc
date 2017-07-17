@@ -1,0 +1,21 @@
+{
+	"presets": [
+		["env", {
+			"targets": {
+				"node": 4
+			},
+			"useBuiltins": true
+		}]
+	],
+	"plugins": [
+		"transform-object-rest-spread",
+		"transform-export-extensions"
+	],
+	"env": {
+		"test": {
+			"plugins": [
+				"istanbul"
+			]
+		}
+	}
+}

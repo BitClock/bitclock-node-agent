@@ -1,0 +1,18 @@
+parser: babel-eslint
+
+extends:
+  - eslint:recommended
+  - plugin:import/errors
+  - plugin:import/warnings
+
+plugins:
+  - import
+
+env:
+  es6: true
+  node: true
+  mocha: true
+
+rules:
+  semi: [error, always]
+  no-unused-vars: [error]
