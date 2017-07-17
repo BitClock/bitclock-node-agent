@@ -1,11 +1,14 @@
 import fs from 'fs';
 import { spawnSync } from 'child_process';
 import glob from 'glob';
+import mkdirp from 'mkdirp';
+import rimraf from 'rimraf';
 import yaml from 'js-yaml';
 import Bluebird from 'bluebird';
 import bitclock from 'bitclock';
 import { expect } from 'chai';
 import spawnRequire from 'spawn-require';
+import uuid from 'uuid';
 
 import getConfig from '../lib/config';
 import agent from '../lib/agent';
@@ -16,23 +19,30 @@ Bluebird.promisifyAll(fs);
 
 const noop = () => undefined;
 const configFile = '.bitclockrc';
-const clientDefaults = bitclock.config();
-const testConfig = {
-	appId: 'test',
-	enable: false
-};
+const testProcessPath = 'test/bitclock-agent-test-process';
+const testConfig = Object.freeze({
+	...bitclock.config(),
+	reportingEndpoint: 'http://localhost:3000',
+	reportingInterval: 1,
+	bucket: uuid.v4(),
+	token: Math.random().toString(16),
+	instrument: true,
+	silent: true
+});
 
-function agentConfigDefaults(config) {
-	return {
-		agent: true,
-		...config
-	};
-}
+process.env.BITCLOCK_TEST_CONFIG = JSON.stringify(testConfig);
 
 function spawnSyncProcess(cmd, args, cb = noop) {
 	const unwrap = spawnRequire(['babel-register']);
-	const result = spawnSync(cmd, args);
+	const filteredArgs = args.filter((value, i) => (
+		// check lastIndexOf to allow entrypoint to be overridden
+		args.lastIndexOf(value) === i
+	));
+	const result = spawnSync(cmd, filteredArgs);
 	unwrap();
+	if (result.stderr.length) {
+		throw new Error(result.stderr.toString());
+	}
 	try {
 		cb(result);
 	} catch (err) {
@@ -47,10 +57,11 @@ function spawnSyncProcess(cmd, args, cb = noop) {
 
 function spawnTestProcess(args = [], cb) {
 	return spawnSyncProcess('node', [
+		'--require',
+		'./test/mock-server',
 		'lib',
-		'--config',
-		configFile,
-		'./test/bitclock-agent-test-process',
+		`--config=${configFile}`,
+		testProcessPath,
 		...args
 	], cb);
 }
@@ -79,6 +90,15 @@ function cleanConfig() {
 		.map(fname => fs.unlinkAsync(fname));
 }
 
+function getReportingCallCount() {
+	const output = fs.readFileSync(`.test_output/${testConfig.bucket}`, 'utf-8');
+	return output.split('\n').length;
+}
+
+before(cb => rimraf('.test_output/*', cb));
+
+before(() => mkdirp('.test_output'));
+
 after(() => cleanConfig());
 
 describe('config', () => {
@@ -87,7 +107,7 @@ describe('config', () => {
 			writeConfig(undefined, ext)
 				.then(() => getConfig())
 				.then((config) => {
-					expect(config).to.deep.equal(agentConfigDefaults(testConfig));
+					expect(config).to.deep.equal(testConfig);
 				})
 				.then(() => cleanConfig())
 		));
@@ -97,9 +117,17 @@ describe('config', () => {
 		writeConfig(undefined, '.other')
 			.then(() => getConfig(`${configFile}.other`))
 			.then((config) => {
-				expect(config).to.deep.equal(agentConfigDefaults(testConfig));
+				expect(config).to.deep.equal(testConfig);
 			})
 			.then(() => cleanConfig())
+	));
+
+	it('should disable the agent if an error occurs', () => (
+		cleanConfig()
+			.then(() => getConfig())
+			.then((config) => {
+				expect(config).to.deep.equal({ instrument: false });
+			})
 	));
 });
 
@@ -114,11 +142,11 @@ describe('instrumentation', () => {
 				expect(load['15m']).to.be.a('number');
 
 				expect(count).to.equal(require('os').cpus().length);
-				expect(utilization).to.be.above(0);
-				expect(utilization).to.be.below(1);
-				expect(load['1m']).to.be.above(0);
-				expect(load['5m']).to.be.above(0);
-				expect(load['15m']).to.be.above(0);
+				expect(utilization).to.be.gte(0);
+				expect(utilization).to.be.lte(1);
+				expect(load['1m']).to.be.gte(0);
+				expect(load['5m']).to.be.gte(0);
+				expect(load['15m']).to.be.gte(0);
 			})
 		));
 
@@ -133,10 +161,10 @@ describe('instrumentation', () => {
 				expect(processMem.external).to.be.a('number');
 				expect(processMem.utilization).to.be.a('number');
 
-				expect(utilization).to.be.above(0);
-				expect(utilization).to.be.below(1);
-				expect(processMem.utilization).to.be.above(0);
-				expect(processMem.utilization).to.be.below(1);
+				expect(utilization).to.be.gte(0);
+				expect(utilization).to.be.lte(1);
+				expect(processMem.utilization).to.be.gte(0);
+				expect(processMem.utilization).to.be.lte(1);
 				expect(total).to.equal(require('os').totalmem());
 				expect(utilization).to.be.above(processMem.utilization);
 			});
@@ -145,11 +173,30 @@ describe('instrumentation', () => {
 });
 
 describe('helpers', () => {
+	describe('cleanWhitespace', () => {
+		it('should replace whitespace sequences with a single space', () => {
+			const str = (`
+					// tabs
+          // spaces
+		  	  // mixed
+			`);
+			expect(helpers.cleanWhitespace(str)).to.equal('// tabs // spaces // mixed');
+		});
+
+		it('should gracefully handle nil values', () => {
+			expect(helpers.cleanWhitespace(null)).to.equal(null);
+			expect(helpers.cleanWhitespace()).to.equal(undefined);
+		});
+	});
+
 	describe('round', () => {
 		it('should round a number to precision', () => {
-			[0, 1, 2, 3, 4].forEach((i) => {
+			[undefined, 1, 2, 3, 4].forEach((i) => {
 				const n = 1e6 * Math.PI;
-				expect(helpers.round(n, i).toString().split('.')[1] || '').to.have.length(i);
+				expect(
+					helpers.round(n, i).toString().split('.')[1] || ''
+				)
+				.to.have.length(i || 0);
 			});
 		});
 	});
@@ -202,24 +249,38 @@ describe('bitclock agent', () => {
 
 	after(() => cleanConfig());
 
+	afterEach(cb => rimraf('.test_output/*', cb));
+
 	it('should read config from the config file at startup', () => {
 		agent({ config: configFile });
-		expect(
-			agentConfigDefaults({ ...clientDefaults, ...testConfig })
-		)
-		.to.deep.equal(bitclock.config());
+		expect(bitclock.config()).to.deep.equal(testConfig);
 	});
 
 	it('should spawn a child process with the correct arguments', () => {
-		spawnTestProcess(['--foo', 'bar'], ({ stdout, status }) => {
+		const timeout = 1000;
+		spawnTestProcess(['--timeout', timeout], ({ stdout, status }) => {
 			const childArgs = JSON.parse(stdout.toString());
-			expect(childArgs.foo).to.equal('bar');
+			expect(childArgs.timeout).to.equal(timeout);
 			expect(status).to.equal(0);
+			expect(getReportingCallCount()).to.be.gte(2);
 		});
 	});
 
+	it('should remove references to the node binary from child args', () => {
+		const spawnArgs = ['node', testProcessPath, '--foo=bar'];
+		spawnTestProcess(spawnArgs, ({ stdout }) => {
+			const childArgs = JSON.parse(stdout.toString());
+			expect(childArgs._).to.not.include('node');
+		});
+	});
+
+	it('should NOT remove references to other binaries from child args', () => {
+		const spawnArgs = ['nodemon', testProcessPath];
+		expect(() => spawnTestProcess(spawnArgs)).to.throw(/cannot find.+nodemon/i);
+	});
+
 	it('should exit with the same code as the child process', () => {
-		spawnTestProcess(['--action', 'exit', '--code', 10], ({ status }) => {
+		spawnTestProcess(['--action=exit', '--code=10'], ({ status }) => {
 			expect(status).to.equal(10);
 		});
 	});
@@ -228,14 +289,16 @@ describe('bitclock agent', () => {
 		const configValue = Math.random().toString(16);
 		return writeConfig({ configValue }).then(() => {
 			spawnSyncProcess('node', [
-				'./test/bitclock-agent-test-process',
-				'--action',
-				'register',
-				'--configValue',
-				configValue
+				'--require',
+				'./test/mock-server',
+				testProcessPath,
+				'--action=register',
+				'--timeout=4000',
+				`--configValue=${configValue}`
 			], ({ stdout }) => {
 				const finalConfig = JSON.parse(stdout.toString());
 				expect(finalConfig.configValue).to.equal(configValue);
+				expect(getReportingCallCount()).to.be.gte(2);
 			});
 		});
 	});

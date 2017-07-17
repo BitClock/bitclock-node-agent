@@ -1,20 +1,28 @@
-const yargs = require('yargs');
+import yargs from 'yargs';
 
 const argv = yargs.parse(process.argv);
 
+function run(cb) {
+	setTimeout(cb, argv.timeout);
+}
+
 switch (argv.action) {
 	case 'exit':
-		process.exit(argv.code);
+		run(() => process.exit(argv.code));
 		break;
 
 	case 'register':
 		require('../../lib/register');
-		// eslint-disable-next-line no-console
-		console.log(JSON.stringify(require('bitclock').config()));
+		run(() => {
+			// eslint-disable-next-line no-console
+			console.log(JSON.stringify(require('bitclock').config()));
+		});
 		break;
 
 	default:
-		// eslint-disable-next-line no-console
-		console.log(JSON.stringify(argv));
+		run(() => (
+			// eslint-disable-next-line no-console
+			console.log(JSON.stringify(argv))
+		));
 		break;
 }
