@@ -3,7 +3,8 @@ npm-debug.log
 dist
 coverage
 .nyc_output
-register.js
+.test_output
+/register.js
 
 # OS generated files #
 ######################
