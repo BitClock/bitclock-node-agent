@@ -158,7 +158,6 @@ describe('instrumentation', () => {
 				expect(processMem.rss).to.be.a('number');
 				expect(processMem.heapTotal).to.be.a('number');
 				expect(processMem.heapUsed).to.be.a('number');
-				expect(processMem.external).to.be.a('number');
 				expect(processMem.utilization).to.be.a('number');
 
 				expect(utilization).to.be.gte(0);

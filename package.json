@@ -29,7 +29,7 @@
     "prebuild": "npm run build:clean",
     "prepublish": "npm run build",
     "pretest": "npm run lint && npm run build:clean && cd test/bitclock-agent-test-process && npm i",
-    "test": "cross-env NODE_ENV=test BITCLOCK_ENV=test BLUEBIRD_DEBUG=1 nyc mocha --timeout=20000 --colors --compilers js:babel-register test/index"
+    "test": "cross-env NODE_ENV=test BITCLOCK_ENV=test BLUEBIRD_DEBUG=1 nyc mocha --timeout=30000 --colors --compilers js:babel-register test/index"
   },
   "lint-staged": {
     "*.js": "lint"
