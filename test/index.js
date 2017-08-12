@@ -66,22 +66,22 @@ function spawnTestProcess(args = [], cb) {
 	], cb);
 }
 
-function writeConfig(values = {}, ext = '') {
+function writeConfig({ values = {}, name = configFile, ext = '' } = {}) {
 	let data;
 	const configObject = { ...testConfig, ...values };
 	switch (ext) {
 		case '.js':
-			data = `module.exports=${JSON.stringify(configObject)};`;
+			data = `module.exports=${JSON.stringify(configObject, null, 2)};`;
 			break;
 		case '.yml':
 		case '.yaml':
 			data = yaml.safeDump(configObject);
 			break;
 		default:
-			data = JSON.stringify(configObject);
+			data = JSON.stringify(configObject, null, 2);
 			break;
 	}
-	return fs.writeFileAsync(`${configFile}${ext}`, data);
+	return fs.writeFileAsync(`${name}${ext}`, data);
 }
 
 function cleanConfig() {
@@ -104,22 +104,52 @@ after(() => cleanConfig());
 describe('config', () => {
 	['', '.js', '.json', '.yml', '.yaml'].forEach((ext) => {
 		it(`should read config from ${configFile}${ext}`, () => (
-			writeConfig(undefined, ext)
+			writeConfig({ ext, values: { ext } })
 				.then(() => getConfig())
 				.then((config) => {
-					expect(config).to.deep.equal(testConfig);
+					expect(config).to.deep.equal({ ...testConfig, ext });
 				})
 				.then(() => cleanConfig())
 		));
 	});
 
 	it('should accept a relative path to a non-standard named config file', () => (
-		writeConfig(undefined, '.other')
+		writeConfig({ ext: '.other' })
 			.then(() => getConfig(`${configFile}.other`))
 			.then((config) => {
 				expect(config).to.deep.equal(testConfig);
 			})
 			.then(() => cleanConfig())
+	));
+
+	it('should extend other config files', () => (
+		cleanConfig()
+			.then(() => Bluebird.all([
+				writeConfig({
+					ext: '.yaml',
+					name: `${configFile}-base`,
+					values: {
+						base: true,
+						foo: 'bar'
+					}
+				}),
+				writeConfig({
+					ext: '.json',
+					name: `${configFile}-extended`,
+					values: {
+						extends: `${configFile}-base.yaml`,
+						base: false
+					}
+				})
+			]))
+			.then(() => getConfig(`${configFile}-extended.json`))
+			.then((config) => {
+				expect(config).to.include({
+					extends: `${configFile}-base.yaml`,
+					base: false,
+					foo: 'bar'
+				});
+			})
 	));
 
 	it('should disable the agent if an error occurs', () => (
@@ -286,7 +316,7 @@ describe('bitclock agent', () => {
 
 	it('should run with the register hook', () => {
 		const configValue = Math.random().toString(16);
-		return writeConfig({ configValue }).then(() => {
+		return writeConfig({ values: { configValue } }).then(() => {
 			spawnSyncProcess('node', [
 				'--require',
 				'./test/mock-server',
