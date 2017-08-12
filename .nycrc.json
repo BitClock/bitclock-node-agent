@@ -1,6 +1,9 @@
 {
+  "check-coverage": true,
   "instrument": false,
   "sourceMap": false,
+  "cache": true,
+  "all": true,
   "lines": 90,
   "statements": 90,
   "functions": 90,
@@ -10,11 +13,7 @@
     "text-summary",
     "html"
   ],
-  "cache": true,
-  "all": true,
   "include": [
     "lib/**/*.js"
-  ],
-  "check-coverage": true,
-  "report-dir": "./coverage"
+  ]
 }
