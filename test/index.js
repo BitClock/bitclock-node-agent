@@ -3,12 +3,14 @@ import { spawnSync } from 'child_process';
 import glob from 'glob';
 import mkdirp from 'mkdirp';
 import rimraf from 'rimraf';
+import ps from 'current-processes';
 import yaml from 'js-yaml';
 import Bluebird from 'bluebird';
 import bitclock from 'bitclock';
 import { expect } from 'chai';
 import spawnRequire from 'spawn-require';
 import uuid from 'uuid';
+import difference from 'lodash/difference';
 
 import getConfig from '../lib/config';
 import agent from '../lib/agent';
@@ -99,6 +101,31 @@ function cleanConfig() {
 function getReportingCallCount() {
 	const output = fs.readFileSync(`.test_output/${testConfig.bucket}`, 'utf-8');
 	return output.split('\n').length;
+}
+
+function pgrepNode() {
+	return Bluebird
+		.fromCallback(cb => ps.get(cb))
+		.then(results => (
+			results
+				.filter(({ name }) => /node/i.test(name))
+				.map(({ pid }) => Number(pid))
+		));
+}
+
+function recursiveCheck(fn, delay = 200, max = 10, attempts = 0) {
+	return Bluebird
+		.try(fn)
+		.catch((err) => {
+			if (attempts >= max) {
+				throw err;
+			}
+			return Bluebird
+				.delay(delay)
+				.then(() => (
+					recursiveCheck(fn, delay, max, attempts + 1)
+				));
+		});
 }
 
 before(cb => rimraf('.test_output/*', cb));
@@ -249,22 +276,6 @@ describe('helpers', () => {
 		});
 	});
 
-	describe('cleanWhitespace', () => {
-		it('should replace whitespace sequences with a single space', () => {
-			const str = (`
-					// tabs
-          // spaces
-		  	  // mixed
-			`);
-			expect(helpers.cleanWhitespace(str)).to.equal('// tabs // spaces // mixed');
-		});
-
-		it('should gracefully handle nil values', () => {
-			expect(helpers.cleanWhitespace(null)).to.equal(null);
-			expect(helpers.cleanWhitespace()).to.equal(undefined);
-		});
-	});
-
 	describe('round', () => {
 		it('should round a number to precision', () => {
 			[undefined, 1, 2, 3, 4].forEach((i) => {
@@ -327,55 +338,90 @@ describe('bitclock agent', () => {
 
 	afterEach(cb => rimraf('.test_output/*', cb));
 
-	it('should read config from the config file at startup', () => {
-		agent({ config: configFile });
-		expect(bitclock.config()).to.deep.equal(testConfig);
-	});
-
-	it('should spawn a child process with the correct arguments', () => {
-		const timeout = 1000;
-		spawnTestProcess(['--timeout', timeout], ({ stdout, status }) => {
-			const childArgs = JSON.parse(stdout.toString());
-			expect(childArgs.timeout).to.equal(timeout);
-			expect(status).to.equal(0);
-			expect(getReportingCallCount()).to.be.gte(2);
+	describe('spawn', () => {
+		it('should read config from the config file at startup', () => {
+			agent({ config: configFile });
+			expect(bitclock.config()).to.deep.equal(testConfig);
 		});
-	});
 
-	it('should remove references to the node binary from child args', () => {
-		const spawnArgs = ['node', testProcessPath, '--foo=bar'];
-		spawnTestProcess(spawnArgs, ({ stdout }) => {
-			const childArgs = JSON.parse(stdout.toString());
-			expect(childArgs._).to.not.include('node');
-		});
-	});
-
-	it('should NOT remove references to other binaries from child args', () => {
-		const spawnArgs = ['nodemon', testProcessPath];
-		expect(() => spawnTestProcess(spawnArgs)).to.throw(/cannot find.+nodemon/i);
-	});
-
-	it('should exit with the same code as the child process', () => {
-		spawnTestProcess(['--action=exit', '--code=10'], ({ status }) => {
-			expect(status).to.equal(10);
-		});
-	});
-
-	it('should run with the register hook', () => {
-		const configValue = Math.random().toString(16);
-		return writeConfig({ values: { configValue } }).then(() => {
-			spawnSyncProcess('node', [
-				'--require',
-				'./test/mock-server',
-				testProcessPath,
-				'--action=register',
-				'--timeout=4000',
-				`--configValue=${configValue}`
-			], ({ stdout }) => {
-				const finalConfig = JSON.parse(stdout.toString());
-				expect(finalConfig.configValue).to.equal(configValue);
+		it('should spawn a child process with the correct arguments', () => {
+			const timeout = 1000;
+			spawnTestProcess(['--timeout', timeout], ({ stdout, status }) => {
+				const childArgs = JSON.parse(stdout.toString());
+				expect(childArgs.timeout).to.equal(timeout);
+				expect(status).to.equal(0);
 				expect(getReportingCallCount()).to.be.gte(2);
 			});
 		});
+
+		it('should remove references to the node binary from child args', () => {
+			const spawnArgs = ['node', testProcessPath, '--foo=bar'];
+			spawnTestProcess(spawnArgs, ({ stdout }) => {
+				const childArgs = JSON.parse(stdout.toString());
+				expect(childArgs._).to.not.include('node');
+			});
+		});
+
+		it('should NOT remove references to other binaries from child args', () => {
+			const spawnArgs = ['nodemon', testProcessPath];
+			expect(() => spawnTestProcess(spawnArgs)).to.throw(/cannot find.+nodemon/i);
+		});
+
+		it('should exit with the same code as the child process', () => {
+			spawnTestProcess(['--action=exit', '--code=10'], ({ status }) => {
+				expect(status).to.equal(10);
+			});
+		});
+	});
+
+	describe('register', () => {
+		it('should run with the register hook', () => {
+			const configValue = Math.random().toString(16);
+			return writeConfig({ values: { configValue } }).then(() => {
+				spawnSyncProcess('node', [
+					'--require',
+					'./test/mock-server',
+					testProcessPath,
+					'--action=register',
+					'--timeout=4000',
+					`--configValue=${configValue}`
+				], ({ stdout }) => {
+					const finalConfig = JSON.parse(stdout.toString());
+					expect(finalConfig.configValue).to.equal(configValue);
+					expect(getReportingCallCount()).to.be.gte(2);
+				});
+			});
+		});
+
+		it('should not leave orphaned child processes if the parent process exits', () => (
+			writeConfig()
+				.then(() => pgrepNode())
+				.tap((existingPids) => {
+					// make sure the test is valid
+					expect(existingPids).to.have.length.gte(1);
+				})
+				.then((existingPids) => {
+					const { stdout } = spawnSyncProcess('node', [
+						'--require',
+						'./test/mock-server',
+						testProcessPath,
+						'--action=register/orphan'
+					]);
+					const { pid } = JSON.parse(stdout.toString());
+					return pgrepNode().then((runningPids) => {
+						// make sure the test process is no longer running
+						expect(runningPids).to.not.include(pid);
+						return existingPids;
+					});
+				})
+				.then(existingPids => (
+					// wait for the reporting process to exit
+					recursiveCheck(() => (
+						pgrepNode().then((runningPids) => {
+							expect(difference(runningPids, existingPids)).to.have.length(0);
+						})
+					), 1000)
+				))
+		));
 	});
 });

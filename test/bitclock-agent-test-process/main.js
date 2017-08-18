@@ -19,6 +19,16 @@ switch (argv.action) {
 		});
 		break;
 
+	case 'register/orphan':
+		// eslint-disable-next-line no-console
+		console.log(JSON.stringify({ pid: process.pid }));
+		process.once('beforeExit', () => {
+			require('../../lib/register');
+			process.removeAllListeners('exit');
+			process.removeAllListeners('close');
+		});
+		break;
+
 	default:
 		run(() => (
 			// eslint-disable-next-line no-console
