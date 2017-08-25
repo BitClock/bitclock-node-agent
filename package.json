@@ -1,6 +1,6 @@
 {
   "name": "bitclock-agent",
-  "version": "0.2.0-beta.2",
+  "version": "0.3.0-beta.1",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
@@ -44,8 +44,11 @@
     "glob": "^7.1.2",
     "is-running": "^2.1.0",
     "js-yaml": "^3.9.0",
+    "lodash.memoize": "^4.1.2",
     "lodash.once": "^4.1.1",
     "lodash.padstart": "^4.6.1",
+    "lodash.throttle": "^4.1.1",
+    "pidusage": "^1.1.6",
     "source-map-support": "^0.4.15",
     "uglify-js": "^3.0.27",
     "winston": "^2.3.1",
@@ -60,6 +63,7 @@
     "babel-preset-env": "^2.0.0-alpha.12",
     "babel-register": "^7.0.0-alpha.12",
     "chai": "^4.1.0",
+    "chai-as-promised": "^7.1.1",
     "cross-env": "^5.0.1",
     "current-processes": "^0.2.1",
     "eslint": "^3.5.0",

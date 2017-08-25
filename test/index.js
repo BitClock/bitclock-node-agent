@@ -1,5 +1,6 @@
 import fs from 'fs';
 import { spawnSync } from 'child_process';
+import { AssertionError } from 'assert';
 import glob from 'glob';
 import mkdirp from 'mkdirp';
 import rimraf from 'rimraf';
@@ -7,7 +8,8 @@ import ps from 'current-processes';
 import yaml from 'js-yaml';
 import Bluebird from 'bluebird';
 import bitclock from 'bitclock';
-import { expect } from 'chai';
+import chai, { expect } from 'chai';
+import chaiAsPromised from 'chai-as-promised';
 import spawnRequire from 'spawn-require';
 import uuid from 'uuid';
 import difference from 'lodash/difference';
@@ -16,6 +18,8 @@ import getConfig from '../lib/config';
 import agent from '../lib/agent';
 import * as helpers from '../lib/helpers';
 import * as os from '../lib/instrumentation/os';
+
+chai.use(chaiAsPromised);
 
 Bluebird.promisifyAll(fs);
 
@@ -196,40 +200,40 @@ describe('config', () => {
 
 describe('instrumentation', () => {
 	describe('os', () => {
-		it('should monitor cpu load', () => (
-			os.cpu().then(({ count, utilization, load }) => {
-				expect(count).to.be.a('number');
-				expect(utilization).to.be.a('number');
-				expect(load['1m']).to.be.a('number');
-				expect(load['5m']).to.be.a('number');
-				expect(load['15m']).to.be.a('number');
+		describe('cpu', () => {
+			it('should reject the promise when pid is missing', () => (
+				expect(os.cpu()).to.be.rejectedWith(AssertionError, 'Missing pid')
+			));
 
-				expect(count).to.equal(require('os').cpus().length);
-				expect(utilization).to.be.gte(0);
-				expect(utilization).to.be.lte(1);
-				expect(load['1m']).to.be.gte(0);
-				expect(load['5m']).to.be.gte(0);
-				expect(load['15m']).to.be.gte(0);
-			})
-		));
+			it('should monitor cpu load', () => (
+				os.cpu(process.pid).then((result) => {
+					expect(result.system).to.be.an('object');
+					expect(result.system.count).to.be.a('number');
+					expect(result.system.load['1m']).to.be.a('number');
+					expect(result.system.load['5m']).to.be.a('number');
+					expect(result.system.load['15m']).to.be.a('number');
+					expect(result.process).to.be.an('object');
+					expect(result.process.utilization).to.be.a('number');
+				})
+			));
+		});
 
-		it('should monitor memory usage', () => {
-			return os.memory().then(({ total, free, utilization, process: processMem }) => {
-				expect(total).to.be.a('number');
-				expect(free).to.be.a('number');
-				expect(utilization).to.be.a('number');
-				expect(processMem.rss).to.be.a('number');
-				expect(processMem.heapTotal).to.be.a('number');
-				expect(processMem.heapUsed).to.be.a('number');
-				expect(processMem.utilization).to.be.a('number');
+		describe('memory', () => {
+			it('should reject the promise when pid is missing', () => (
+				expect(os.memory()).to.be.rejectedWith(AssertionError, 'Missing pid')
+			));
 
-				expect(utilization).to.be.gte(0);
-				expect(utilization).to.be.lte(1);
-				expect(processMem.utilization).to.be.gte(0);
-				expect(processMem.utilization).to.be.lte(1);
-				expect(total).to.equal(require('os').totalmem());
-				expect(utilization).to.be.above(processMem.utilization);
-			});
+			it('should monitor memory usage', () => (
+				os.memory(process.pid).then((result) => {
+					expect(result.system).to.be.an('object');
+					expect(result.system.total).to.be.a('number');
+					expect(result.system.free).to.be.a('number');
+					expect(result.system.utilization).to.be.a('number');
+					expect(result.process).to.be.an('object');
+					expect(result.process.bytes).to.be.a('number');
+					expect(result.process.utilization).to.be.a('number');
+				})
+			));
 		});
 	});
 });
