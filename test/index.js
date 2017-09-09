@@ -1,3 +1,5 @@
+/* eslint import/namespace:0 */
+
 import fs from 'fs';
 import { spawnSync } from 'child_process';
 import { AssertionError } from 'assert';
@@ -14,10 +16,10 @@ import spawnRequire from 'spawn-require';
 import uuid from 'uuid';
 import difference from 'lodash/difference';
 
-import getConfig from '../lib/config';
 import agent from '../lib/agent';
+import getConfig, { withDefaults } from '../lib/config';
 import * as helpers from '../lib/helpers';
-import * as os from '../lib/instrumentation/os';
+import * as core from '../lib/instrumentation/core';
 
 chai.use(chaiAsPromised);
 
@@ -26,17 +28,18 @@ Bluebird.promisifyAll(fs);
 const noop = () => undefined;
 const configFile = '.bitclockrc';
 const testProcessPath = 'test/bitclock-agent-test-process';
-const testConfig = Object.freeze({
+const testConfig = withDefaults({
 	...bitclock.config(),
 	reportingEndpoint: 'http://localhost:3000',
 	reportingInterval: 1,
 	bucket: uuid.v4(),
 	token: Math.random().toString(16),
-	instrument: true,
 	silent: true
 });
 
 process.env.BITCLOCK_TEST_CONFIG = JSON.stringify(testConfig);
+
+require('./mock-server');
 
 function spawnSyncProcess(cmd, args, cb = noop) {
 	const unwrap = spawnRequire(['babel-register']);
@@ -86,11 +89,13 @@ function writeConfig({ values = {}, name = configFile, ext = '' } = {}) {
 		case '.yaml':
 			data = yaml.safeDump(configObject);
 			break;
-		default:
+		default: {
+			const flat = helpers.flatten(configObject);
 			data = Object
-				.keys(configObject)
-				.map(key => `${key}="${configObject[key]}"`)
+				.keys(flat)
+				.map(key => `${key}=${flat[key]}`)
 				.join('\n');
+			}
 			break;
 	}
 	return fs.writeFileAsync(`${name}${ext}`, data);
@@ -134,7 +139,7 @@ function recursiveCheck(fn, delay = 200, max = 10, attempts = 0) {
 
 before(cb => rimraf('.test_output/*', cb));
 
-before(() => mkdirp('.test_output'));
+before(cb => mkdirp('.test_output', {}, cb));
 
 after(() => cleanConfig());
 
@@ -189,6 +194,36 @@ describe('config', () => {
 			})
 	));
 
+	it('should fail gracefully when extends target is missing', () => (
+		cleanConfig().then(() => (
+			writeConfig({
+				ext: '.yaml',
+				name: configFile,
+				values: {
+					foo: 'bar',
+					extends: '/ENOENT.yaml'
+				}
+			})
+		))
+		.then(() => getConfig())
+		.then((config) => {
+			expect(config).to.include({
+				foo: 'bar',
+				extends: '/ENOENT.yaml'
+			});
+		})
+	));
+
+	it('should not allow a config file to extend itself', () => (
+		cleanConfig().then(() => (
+			writeConfig({ values: { extends: configFile } })
+		))
+		.then(() => getConfig())
+		.then((config) => {
+			expect(config).to.include({ extends: configFile });
+		})
+	));
+
 	it('should disable the agent if an error occurs', () => (
 		cleanConfig()
 			.then(() => getConfig())
@@ -199,14 +234,14 @@ describe('config', () => {
 });
 
 describe('instrumentation', () => {
-	describe('os', () => {
+	describe('core', () => {
 		describe('cpu', () => {
 			it('should reject the promise when pid is missing', () => (
-				expect(os.cpu()).to.be.rejectedWith(AssertionError, 'Missing pid')
+				expect(core.cpu({})).to.be.rejectedWith(AssertionError, 'Missing pid')
 			));
 
 			it('should monitor cpu load', () => (
-				os.cpu(process.pid).then((result) => {
+				core.cpu(process).then((result) => {
 					expect(result.system).to.be.an('object');
 					expect(result.system.count).to.be.a('number');
 					expect(result.system.load['1m']).to.be.a('number');
@@ -220,11 +255,11 @@ describe('instrumentation', () => {
 
 		describe('memory', () => {
 			it('should reject the promise when pid is missing', () => (
-				expect(os.memory()).to.be.rejectedWith(AssertionError, 'Missing pid')
+				expect(core.memory({})).to.be.rejectedWith(AssertionError, 'Missing pid')
 			));
 
 			it('should monitor memory usage', () => (
-				os.memory(process.pid).then((result) => {
+				core.memory(process).then((result) => {
 					expect(result.system).to.be.an('object');
 					expect(result.system.total).to.be.a('number');
 					expect(result.system.free).to.be.a('number');
@@ -234,6 +269,55 @@ describe('instrumentation', () => {
 					expect(result.process.utilization).to.be.a('number');
 				})
 			));
+		});
+	});
+
+	describe('reporting', () => {
+		beforeEach(() => {
+			delete require.cache[require.resolve('../lib/instrumentation')];
+		});
+
+		afterEach(() => bitclock.config(testConfig));
+
+		it('should only send metrics specified in config.instrument', () => {
+			bitclock.config(testConfig);
+			const { runIntervalReporting } = require('../lib/instrumentation');
+			runIntervalReporting(process).then((metrics) => {
+				const instrumentKeys = Object.keys(
+					helpers.flatten(testConfig.instrument)
+				);
+				Object.keys(metrics).forEach((metric) => {
+					expect(
+						instrumentKeys.some(key => metric.includes(key))
+					).to.equal(true);
+				});
+			});
+		});
+
+		it('should send all metrics when config.instrument === true', () => {
+			bitclock.config({ ...testConfig, instrument: true });
+			const { runIntervalReporting } = require('../lib/instrumentation');
+			return Bluebird.props({
+				cpu: core.cpu(process),
+				memory: core.memory(process)
+			})
+			.then(result => (
+				Object.keys(helpers.flatten({ core: result }))
+			))
+			.then(instrumentKeys => (
+				runIntervalReporting(process).then((metrics) => {
+					const metricsKeys = Object.keys(metrics);
+					expect(metricsKeys.sort()).to.deep.equal(instrumentKeys.sort());
+				})
+			));
+		});
+
+		it('should send no metrics when config.instrument === false', () => {
+			bitclock.config({ ...testConfig, instrument: false });
+			const { runIntervalReporting } = require('../lib/instrumentation');
+			runIntervalReporting(process).then((metrics) => {
+				expect(Object.keys(metrics)).to.have.length(0);
+			});
 		});
 	});
 });
@@ -292,17 +376,19 @@ describe('helpers', () => {
 		});
 	});
 
-	describe('flatten', () => {
+	describe('flatten / unflatten', () => {
 		const fn = () => {};
 		const sym = Symbol('symbol');
 
-		const testObject = {
+		const nested = {
 			a: {
 				b: {
 					c: [{
 						d: null,
 						i: [[[]]],
-						j: 'this is a longer string'
+						j: 'this is a longer string',
+						k: {},
+						l: true
 					}, fn, sym]
 				}
 			},
@@ -310,27 +396,37 @@ describe('helpers', () => {
 			f: [{ g: ['h', null, 1, []] }]
 		};
 
-		const expected = {
+		const flattened = {
 			'a.b.c.0.d': null,
+			'a.b.c.0.i.0.0': [],
 			'a.b.c.0.j': 'this is a longer string',
+			'a.b.c.0.k': {},
+			'a.b.c.0.l': true,
 			'a.b.c.1': fn,
 			'a.b.c.2': sym,
-			'e': null,
+			e: null,
 			'f.0.g.0': 'h',
 			'f.0.g.1': null,
-			'f.0.g.2': 1
+			'f.0.g.2': 1,
+			'f.0.g.3': []
 		};
 
 		it('should flatten a nested object', () => {
-			expect(helpers.flatten(testObject)).to.deep.equal(expected);
+			expect(helpers.flatten(nested)).to.deep.equal(flattened);
+		});
+
+		it('should nest a flattened object', () => {
+			expect(helpers.unflatten(flattened)).to.deep.equal(nested);
 		});
 
 		it('should gracefully handle non-object values', () => {
-			expect(helpers.flatten()).to.deep.equal({ '': undefined });
-			expect(helpers.flatten(null)).to.deep.equal({ '': null });
-			expect(helpers.flatten(false)).to.deep.equal({ '': false });
-			expect(helpers.flatten(100000)).to.deep.equal({ '': 100000 });
-			expect(helpers.flatten(Infinity)).to.deep.equal({ '': Infinity });
+			['flatten', 'unflatten'].forEach((key) => {
+				expect(helpers[key]()).to.deep.equal(undefined);
+				expect(helpers[key](null)).to.deep.equal(null);
+				expect(helpers[key](false)).to.deep.equal(false);
+				expect(helpers[key](100000)).to.deep.equal(100000);
+				expect(helpers[key](Infinity)).to.deep.equal(Infinity);
+			});
 		});
 	});
 });
