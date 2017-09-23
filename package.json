@@ -1,6 +1,6 @@
 {
   "name": "bitclock-agent",
-  "version": "0.4.0-beta.1",
+  "version": "0.5.0-beta.1",
   "license": "BSD-3-Clause",
   "repository": {
     "type": "git",
@@ -38,7 +38,7 @@
   },
   "pre-commit": "lint:staged",
   "dependencies": {
-    "bitclock": "^0.7.0-beta.4",
+    "bitclock": "^0.8.0-beta.1",
     "bluebird": "^3.5.0",
     "colors": "^1.1.2",
     "core-js": "^2.4.1",
