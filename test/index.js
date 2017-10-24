@@ -3,6 +3,7 @@
 import fs from 'fs';
 import { spawnSync } from 'child_process';
 import { AssertionError } from 'assert';
+import { randomBytes } from 'crypto';
 import glob from 'glob';
 import mkdirp from 'mkdirp';
 import rimraf from 'rimraf';
@@ -25,15 +26,22 @@ chai.use(chaiAsPromised);
 
 Bluebird.promisifyAll(fs);
 
+function generateToken() {
+	return randomBytes(40).toString('hex');
+}
+
 const noop = () => undefined;
 const configFile = '.bitclockrc';
 const testProcessPath = 'test/bitclock-agent-test-process';
 const testConfig = withDefaults({
-	...bitclock.config(),
+	...bitclock.Config(),
 	reportingEndpoint: 'http://localhost:3000',
 	reportingInterval: 1,
 	bucket: uuid.v4(),
-	token: Math.random().toString(16),
+	token: {
+		private: generateToken(),
+		public: generateToken()
+	},
 	silent: true
 });
 
@@ -41,13 +49,14 @@ process.env.BITCLOCK_TEST_CONFIG = JSON.stringify(testConfig);
 
 require('./mock-server');
 
-function spawnSyncProcess(cmd, args, cb = noop) {
+function spawnSyncProcess(cmd, args, env = {}, cb = noop) {
 	const unwrap = spawnRequire(['babel-register']);
 	const filteredArgs = args.filter((value, i) => (
 		// check lastIndexOf to allow entrypoint to be overridden
 		args.lastIndexOf(value) === i
 	));
-	const result = spawnSync(cmd, filteredArgs);
+	const opts = { env: { ...process.env, ...env } };
+	const result = spawnSync(cmd, filteredArgs, opts);
 	unwrap();
 	if (result.stderr.length) {
 		throw new Error(result.stderr.toString());
@@ -64,7 +73,7 @@ function spawnSyncProcess(cmd, args, cb = noop) {
 	return result;
 }
 
-function spawnTestProcess(args = [], cb) {
+function spawnTestProcess(args = [], env, cb) {
 	return spawnSyncProcess('node', [
 		'--require',
 		'./test/mock-server',
@@ -72,7 +81,7 @@ function spawnTestProcess(args = [], cb) {
 		`--config=${configFile}`,
 		testProcessPath,
 		...args
-	], cb);
+	], env, cb);
 }
 
 function writeConfig({ values = {}, name = configFile, ext = '' } = {}) {
@@ -107,9 +116,12 @@ function cleanConfig() {
 		.map(fname => fs.unlinkAsync(fname));
 }
 
-function getReportingCallCount() {
+function getReportingCallCount(predicate = () => true) {
 	const output = fs.readFileSync(`.test_output/${testConfig.bucket}`, 'utf-8');
-	return output.split('\n').length;
+	return output
+		.split('\n')
+		.filter(line => line && predicate(line))
+		.length;
 }
 
 function pgrepNode() {
@@ -220,7 +232,41 @@ describe('config', () => {
 		))
 		.then(() => getConfig())
 		.then((config) => {
-			expect(config).to.include({ extends: configFile });
+			expect(config).to.not.have.property('extends');
+		})
+	));
+
+	it('should not allow a circular config chain', () => (
+		Bluebird.all([
+			writeConfig({
+				name: `${configFile}-a`,
+				ext: '.json',
+				values: {
+					extends: `${configFile}-b.json`
+				}
+			}),
+			writeConfig({
+				name: `${configFile}-b`,
+				ext: '.json',
+				values: {
+					extends: `${configFile}-c.json`
+				}
+			}),
+			writeConfig({
+				name: `${configFile}-c`,
+				ext: '.json',
+				values: {
+					final: true,
+					extends: `${configFile}-a.json`
+				}
+			})
+		])
+		.then(() => getConfig(`${configFile}-a.json`))
+		.then((config) => {
+			expect(config).to.include({
+				extends: `${configFile}-b.json`,
+				final: true
+			});
 		})
 	));
 
@@ -277,10 +323,10 @@ describe('instrumentation', () => {
 			delete require.cache[require.resolve('../lib/instrumentation')];
 		});
 
-		afterEach(() => bitclock.config(testConfig));
+		afterEach(() => bitclock.Config(testConfig));
 
 		it('should only send metrics specified in config.instrument', () => {
-			bitclock.config(testConfig);
+			bitclock.Config(testConfig);
 			const { runIntervalReporting } = require('../lib/instrumentation');
 			runIntervalReporting(process).then((metrics) => {
 				const instrumentKeys = Object.keys(
@@ -295,7 +341,7 @@ describe('instrumentation', () => {
 		});
 
 		it('should send all metrics when config.instrument === true', () => {
-			bitclock.config({ ...testConfig, instrument: true });
+			bitclock.Config({ ...testConfig, instrument: true });
 			const { runIntervalReporting } = require('../lib/instrumentation');
 			return Bluebird.props({
 				cpu: core.cpu(process),
@@ -313,7 +359,7 @@ describe('instrumentation', () => {
 		});
 
 		it('should send no metrics when config.instrument === false', () => {
-			bitclock.config({ ...testConfig, instrument: false });
+			bitclock.Config({ ...testConfig, instrument: false });
 			const { runIntervalReporting } = require('../lib/instrumentation');
 			runIntervalReporting(process).then((metrics) => {
 				expect(Object.keys(metrics)).to.have.length(0);
@@ -441,22 +487,37 @@ describe('bitclock agent', () => {
 	describe('spawn', () => {
 		it('should read config from the config file at startup', () => {
 			agent({ config: configFile });
-			expect(bitclock.config()).to.deep.equal(testConfig);
+			expect(bitclock.Config()).to.deep.equal(testConfig);
 		});
+
+		it('should always call ensureIndex at startup', () => (
+			writeConfig({ values: { instrument: false } }).then(() => {
+				spawnTestProcess(['--timeout=1000'], {}, () => {
+					const count = getReportingCallCount(line => (
+						JSON.parse(line).uri.endsWith('/index')
+					));
+					expect(count).to.equal(1);
+				});
+			})
+			.finally(() => writeConfig())
+		));
 
 		it('should spawn a child process with the correct arguments', () => {
 			const timeout = 1000;
-			spawnTestProcess(['--timeout', timeout], ({ stdout, status }) => {
+			spawnTestProcess(['--timeout', timeout], {}, ({ stdout, status }) => {
 				const childArgs = JSON.parse(stdout.toString());
+				const count = getReportingCallCount(line => (
+					JSON.parse(line).uri.endsWith('/event')
+				));
 				expect(childArgs.timeout).to.equal(timeout);
 				expect(status).to.equal(0);
-				expect(getReportingCallCount()).to.be.gte(2);
+				expect(count).to.be.gte(2);
 			});
 		});
 
 		it('should remove references to the node binary from child args', () => {
 			const spawnArgs = ['node', testProcessPath, '--foo=bar'];
-			spawnTestProcess(spawnArgs, ({ stdout }) => {
+			spawnTestProcess(spawnArgs, {}, ({ stdout }) => {
 				const childArgs = JSON.parse(stdout.toString());
 				expect(childArgs._).to.not.include('node');
 			});
@@ -468,13 +529,40 @@ describe('bitclock agent', () => {
 		});
 
 		it('should exit with the same code as the child process', () => {
-			spawnTestProcess(['--action=exit', '--code=10'], ({ status }) => {
+			spawnTestProcess(['--action=exit', '--code=10'], {}, ({ status }) => {
 				expect(status).to.equal(10);
+			});
+		});
+
+		it('should always prioritize env.BITCLOCK_TOKEN over config.token', () => {
+			const BITCLOCK_TOKEN = generateToken();
+			const env = { BITCLOCK_TOKEN };
+			spawnTestProcess(['--action=token'], env, ({ stdout }) => {
+				const { token } = JSON.parse(stdout.toString());
+				expect(token).to.equal(BITCLOCK_TOKEN);
 			});
 		});
 	});
 
 	describe('register', () => {
+		it('should always call ensureIndex at startup', () => (
+			writeConfig({ values: { instrument: false } }).then(() => {
+				spawnSyncProcess('node', [
+					'--require',
+					'./test/mock-server',
+					testProcessPath,
+					'--action=register',
+					'--timeout=1000'
+				], {}, () => {
+					const count = getReportingCallCount(line => (
+						JSON.parse(line).uri.endsWith('/index')
+					));
+					expect(count).to.equal(1);
+				});
+			})
+			.finally(() => writeConfig())
+		));
+
 		it('should run with the register hook', () => {
 			const configValue = Math.random().toString(16);
 			return writeConfig({ values: { configValue } }).then(() => {
@@ -485,10 +573,13 @@ describe('bitclock agent', () => {
 					'--action=register',
 					'--timeout=4000',
 					`--configValue=${configValue}`
-				], ({ stdout }) => {
+				], {}, ({ stdout }) => {
 					const finalConfig = JSON.parse(stdout.toString());
+					const count = getReportingCallCount(line => (
+						JSON.parse(line).uri.endsWith('/event')
+					));
 					expect(finalConfig.configValue).to.equal(configValue);
-					expect(getReportingCallCount()).to.be.gte(2);
+					expect(count).to.be.gte(2);
 				});
 			});
 		});
@@ -523,5 +614,19 @@ describe('bitclock agent', () => {
 					), 1000)
 				))
 		));
+
+		it('should always prioritize env.BITCLOCK_TOKEN over config.token', () => {
+			const BITCLOCK_TOKEN = generateToken();
+			const env = { BITCLOCK_TOKEN };
+			spawnSyncProcess('node', [
+				'--require',
+				'./test/mock-server',
+				testProcessPath,
+				'--action=register/token'
+			], env, ({ stdout }) => {
+				const { token } = JSON.parse(stdout.toString());
+				expect(token).to.equal(BITCLOCK_TOKEN);
+			});
+		});
 	});
 });

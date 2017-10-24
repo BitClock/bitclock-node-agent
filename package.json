@@ -1,6 +1,6 @@
 {
   "name": "bitclock-agent",
-  "version": "0.5.0-beta.1",
+  "version": "0.6.0-beta.1",
   "license": "BSD-3-Clause",
   "repository": {
     "type": "git",
@@ -28,26 +28,26 @@
     "lint:staged": "lint-staged",
     "mocha": "nyc mocha --timeout=60000 --compilers js:babel-register",
     "prebuild": "npm run clean",
-    "prepublish": "npm run build",
+    "prepublishOnly": "npm run build",
     "pretest": "npm run lint && npm run clean && cd test/bitclock-agent-test-process && npm i",
     "test": "npm run test-only",
-    "test-only": "cross-env NODE_ENV=test BITCLOCK_ENV=test BITCLOCK_LOG_LEVEL=error npm run mocha test/index"
+    "test-only": "cross-env NODE_ENV=test BITCLOCK_ENV=test BITCLOCK_LOG_LEVEL=${BITCLOCK_LOG_LEVEL:-error} npm run mocha test/index"
   },
   "lint-staged": {
     "*.js": "lint"
   },
   "pre-commit": "lint:staged",
   "dependencies": {
-    "bitclock": "^0.8.0-beta.1",
+    "babel-runtime": "^6.26.0",
+    "bitclock": "^0.10.1-beta.1",
     "bluebird": "^3.5.0",
     "colors": "^1.1.2",
-    "core-js": "^2.4.1",
+    "deepmerge": "^2.0.0",
     "dotenv": "^4.0.0",
     "glob": "^7.1.2",
     "is-running": "^2.1.0",
     "js-yaml": "^3.9.0",
     "lodash.memoize": "^4.1.2",
-    "lodash.merge": "^4.6.0",
     "lodash.once": "^4.1.1",
     "lodash.padstart": "^4.6.1",
     "lodash.throttle": "^4.1.1",
@@ -58,13 +58,14 @@
     "yargs": "^8.0.2"
   },
   "devDependencies": {
-    "babel-cli": "^7.0.0-alpha.12",
-    "babel-eslint": "^8.0.0-alpha.13",
+    "babel-cli": "^6.26.0",
+    "babel-eslint": "^8.0.1",
     "babel-plugin-istanbul": "^4.1.4",
-    "babel-plugin-transform-export-extensions": "^7.0.0-alpha.12",
-    "babel-plugin-transform-object-rest-spread": "^7.0.0-alpha.12",
-    "babel-preset-env": "^2.0.0-alpha.12",
-    "babel-register": "^7.0.0-alpha.12",
+    "babel-plugin-transform-export-extensions": "^6.22.0",
+    "babel-plugin-transform-object-rest-spread": "^6.26.0",
+    "babel-plugin-transform-runtime": "^6.23.0",
+    "babel-preset-env": "^1.6.1",
+    "babel-register": "^6.26.0",
     "chai": "^4.1.0",
     "chai-as-promised": "^7.1.1",
     "cross-env": "^5.0.1",
