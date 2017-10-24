@@ -11,11 +11,28 @@ switch (argv.action) {
 		run(() => process.exit(argv.code));
 		break;
 
+	case 'token':
+		run(() => {
+			const { token } = require('bitclock').Config();
+			// eslint-disable-next-line no-console
+			console.log(JSON.stringify({ token }));
+		});
+		break;
+
 	case 'register':
 		require('../../lib/register');
 		run(() => {
 			// eslint-disable-next-line no-console
-			console.log(JSON.stringify(require('bitclock').config()));
+			console.log(JSON.stringify(require('bitclock').Config()));
+		});
+		break;
+
+	case 'register/token':
+		require('../../lib/register');
+		run(() => {
+			const { token } = require('bitclock').Config();
+			// eslint-disable-next-line no-console
+			console.log(JSON.stringify({ token }));
 		});
 		break;
 

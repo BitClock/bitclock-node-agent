@@ -1,6 +1,6 @@
 {
   "name": "bitclock-agent",
-  "version": "0.5.0-beta.1",
+  "version": "0.6.0-beta.1",
   "license": "BSD-3-Clause",
   "repository": {
     "type": "git",
@@ -31,14 +31,14 @@
     "prepublishOnly": "npm run build",
     "pretest": "npm run lint && npm run clean && cd test/bitclock-agent-test-process && npm i",
     "test": "npm run test-only",
-    "test-only": "cross-env NODE_ENV=test BITCLOCK_ENV=test BITCLOCK_LOG_LEVEL=error npm run mocha test/index"
+    "test-only": "cross-env NODE_ENV=test BITCLOCK_ENV=test BITCLOCK_LOG_LEVEL=${BITCLOCK_LOG_LEVEL:-error} npm run mocha test/index"
   },
   "lint-staged": {
     "*.js": "lint"
   },
   "pre-commit": "lint:staged",
   "dependencies": {
-    "bitclock": "^0.8.0-beta.1",
+    "bitclock": "^0.10.1-beta.1",
     "bluebird": "^3.5.0",
     "colors": "^1.1.2",
     "core-js": "^2.4.1",
